@@ -1,39 +1,53 @@
-import {
-  Connection,
-  Keypair,
-  PublicKey,
-  type Cluster,
-  LAMPORTS_PER_SOL,
-} from "@solana/web3.js";
 import * as fs from "fs";
+import {
+  type Cluster,
+  Connection,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+} from "@solana/web3.js";
+
+import {
+  type GenericFile,
+  type KeypairSigner,
+  type Umi,
+  createGenericFile,
+  createSignerFromKeypair,
+  generateSigner,
+} from "@metaplex-foundation/umi";
+import { CLUSTERS, DEFAULT_CLUSTER } from "./const";
 
 export function getCluster(): Cluster {
-  const parsedCluster = process.env.CLUSTER;
+  const parsedCluster = process.env.CLUSTER as Cluster | undefined;
 
   if (!parsedCluster) {
-    return "devnet";
+    return DEFAULT_CLUSTER;
   }
-  if (!["devnet", "testnet", "mainnet-beta"].includes(parsedCluster)) {
+
+  if (!CLUSTERS.includes(parsedCluster)) {
     throw new Error(`Cluster ${parsedCluster} not supported`);
   }
 
-  return parsedCluster as Cluster;
+  return parsedCluster;
 }
 
-export function getOrGenerateKeypair(privateKeyPath: string): Keypair {
-  if (!fs.existsSync(privateKeyPath)) {
-    const keypair = Keypair.generate();
-    fs.writeFileSync(privateKeyPath, keypair.secretKey);
+export async function getOrGenerateSigner(umi: Umi): Promise<KeypairSigner> {
+  const pkPath = `keypair.${getCluster()}.json`;
+  const pkFile = Bun.file(pkPath);
+
+  if (pkFile.size === 0) {
+    const keypair = generateSigner(umi);
+    console.log(`Created a new keypair ${keypair.publicKey} at ${pkPath}`);
+    Bun.write(pkPath, JSON.stringify(Array.from(keypair.secretKey)));
     return keypair;
   }
 
-  return Keypair.fromSecretKey(
-    new Uint8Array(JSON.parse(fs.readFileSync(privateKeyPath, "utf-8")))
+  const keypair = umi.eddsa.createKeypairFromSecretKey(
+    new Uint8Array(await pkFile.json())
   );
-}
 
-function lamportsToSol(lamports: number): number {
-  return lamports / LAMPORTS_PER_SOL;
+  console.log(`Loaded an existing ${keypair.publicKey} from ${pkPath}`);
+
+  return createSignerFromKeypair(umi, keypair);
 }
 
 export async function ensureSufficientBalance(
@@ -57,4 +71,14 @@ export async function ensureSufficientBalance(
 
   console.log(`Requesting airdrop...`);
   await connection.requestAirdrop(publicKey, LAMPORTS_PER_SOL);
+}
+
+export async function createGenericFileFromPath(
+  path: string
+): Promise<GenericFile> {
+  const file = Bun.file(path);
+  const name = path.split("/").pop()!;
+
+  const arrbuf = await file.arrayBuffer();
+  return createGenericFile(Buffer.from(arrbuf), name);
 }
